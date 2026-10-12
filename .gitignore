@@ -1,2 +1,5 @@
 .site-stage-*/
 site-package*.tgz
+node_modules/
+artifacts/
+.env

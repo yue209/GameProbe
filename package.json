@@ -1,0 +1,13 @@
+{
+  "name": "tactical-qa-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test:buggy": "node scripts/run-agent.mjs --version buggy",
+    "test:fixed": "node scripts/run-agent.mjs --version fixed"
+  },
+  "dependencies": {
+    "playwright": "latest"
+  }
+}

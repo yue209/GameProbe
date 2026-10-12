@@ -7,10 +7,12 @@
 
 ## 本地启动
 
-这是无构建依赖的静态站点。不要直接双击 HTML（跨页面状态与截图需要同源 HTTP 环境）。在项目根目录执行：
+安装依赖并启动本地全栈服务：
 
 ```powershell
-node -e "const h=require('http'),f=require('fs'),p=require('path');h.createServer((q,s)=>{let x=q.url==='/'?'index.html':q.url.slice(1).split('?')[0];f.readFile(p.join(process.cwd(),'dist',x),(e,d)=>{if(e){s.statusCode=404;return s.end('not found')}s.setHeader('Content-Type',x.endsWith('.css')?'text/css':x.endsWith('.js')?'text/javascript':'text/html');s.end(d)})}).listen(4175,'127.0.0.1',()=>console.log('http://127.0.0.1:4175'))"
+pnpm install
+$env:DASHSCOPE_API_KEY="你的服务端密钥"
+pnpm start
 ```
 
 浏览器打开 `http://127.0.0.1:4175`。
@@ -31,8 +33,17 @@ node -e "const h=require('http'),f=require('fs'),p=require('path');h.createServe
 
 ## 模型配置
 
-当前公开演示默认是“固定用例模式，未运行 AI 需求分析”，页面已明确标注。若接入模型，应新增服务端 `/api/analyze-requirement`：服务端从 `OPENAI_API_KEY` 环境变量读取密钥，返回经过 JSON Schema 校验的规则、待澄清事项和结构化用例；浏览器端不得接收或持久化密钥。模型只能从以下动作组合步骤：
+本地服务通过 `/api/agent/analyze` 调用 Qwen-Plus，通过 `/api/agent/run` 启动 Playwright。服务端从 `DASHSCOPE_API_KEY` 环境变量读取密钥；浏览器端不会接收或持久化密钥。未配置密钥时，前端明确显示“Qwen 未配置”，仍可运行固定用例。模型只能从以下动作组合步骤：
 
 `reset_account`、`set_inventory`、`advance_date`、`click_claim`、`read_state`、`capture_evidence`。
 
 模型输出不得直接执行任意代码。确定性断言、截图、状态记录和最终结果分类仍由执行器负责。
+
+直接运行真实浏览器回归：
+
+```powershell
+pnpm test:buggy
+pnpm test:fixed
+```
+
+执行证据保存在 `artifacts/<run-id>/`，包括真实页面 PNG 截图和 `report.json`。
