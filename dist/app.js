@@ -1,98 +1,36 @@
-const $ = s => document.querySelector(s);
-const $$ = s => [...document.querySelectorAll(s)];
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-const defaultRules = [
-  '每个账号每天最多领取 1 次',
-  '每张训练券占 1 个背包格且不叠加',
-  '背包满时发奖失败，不能消耗领取机会',
-  '清理背包后，同一天可以再次领取',
-  '资格按测试环境模拟日期刷新'
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)], wait=ms=>new Promise(r=>setTimeout(r,ms));
+const daily=`每个账号每天可以领取1张训练券。\n一张训练券占一个背包格子，不叠加。\n背包满时领取失败，不消耗当天领取机会。\n清空背包后可以重新领取。\n日期由测试环境的可控时钟决定。`;
+const lifetime=`每个账号永久只能领取1张训练券。\n一张训练券占一个背包格子，不叠加。\n背包满时领取失败，不消耗领取机会。\n清空背包后可以重新领取。\n日期由测试环境的可控时钟决定。`;
+let spec='daily',confirmed=false,running=false,stopped=false,faultNext=false,results=[],evidence=[],hasDefect=false;
+const frame=$('#gameFrame');
+const baseCases=()=>[
+ {id:'C01',name:'空位时首次领取',pre:'未领取；背包 4/5',steps:'重置账号 → 点击领取 → 读取状态',expect:'领取成功；训练券 +1；背包 5/5',basis:spec==='daily'?'每天可领取1张':'永久可领取1张'},
+ {id:'C02',name:'重复领取不再发奖',pre:'已成功领取一次',steps:'首次领取 → 再次点击领取 → 读取状态',expect:'第二次失败；训练券数量不变',basis:spec==='daily'?'每天最多一次':'每账号永久一次'},
+ {id:'C03',name:'背包满不消耗资格',pre:'未领取；背包 5/5',steps:'填满背包 → 点击领取 → 读取状态',expect:'提示背包已满；领取资格仍可用',basis:'发奖失败不消耗领取机会'},
+ {id:'C04',name:'满包失败后清空重试',pre:'未领取；背包 5/5',steps:'领取失败 → 清空背包 → 再点击领取',expect:'第二次领取成功；训练券为1',basis:'清空背包后可以重新领取'},
+ {id:'C05',name:spec==='daily'?'跨日恢复资格':'跨日不恢复资格',pre:'前一天已成功领取',steps:'首次领取 → 推进日期 → 再点击领取',expect:spec==='daily'?'新一天领取成功；累计2张':'第二次仍不可领取；累计1张',basis:spec==='daily'?'按环境日期刷新':'每账号永久一次'}
 ];
-
-const cases = [
-  {id:'normal',name:'正常领取',basis:'每天可领取1张训练券',desc:'未领取、背包有空位 → 获得 1 张券'},
-  {id:'duplicate',name:'重复领取',basis:'每个账号每天一次',desc:'当天已领取 → 再次点击不发奖'},
-  {id:'full',name:'背包已满',basis:'背包满时领取失败',desc:'无空位 → 失败且不扣机会'},
-  {id:'retry',name:'失败后重试',basis:'失败不消耗领取机会',desc:'领取失败 → 清空背包 → 再领取成功'},
-  {id:'nextday',name:'跨日领取',basis:'按环境日期判断跨日',desc:'前一天已领取 → 推进日期 → 新一天可领取'}
-];
-
-let state = {date:new Date(2026,9,12),used:2,tickets:0,claimedDate:null,version:'buggy'};
-let results = {};
-let running = false;
-let lastFailed = null;
-
-function fmtDate(){return `${state.date.getFullYear()}年${state.date.getMonth()+1}月${state.date.getDate()}日`}
-function dateKey(){return state.date.toISOString().slice(0,10)}
-function renderState(){
-  $('#dateText').textContent=fmtDate(); $('#usedSlots').textContent=state.used;
-  $('#ticketCount').textContent=state.tickets;
-  $('#stateText').textContent=state.claimedDate===dateKey()?'今天已领取':'未领取';
-  $('#remainingText').textContent=`剩余 ${6-state.used} 个空位`;
-  $('#slots').innerHTML=Array.from({length:6},(_,i)=>`<div class="slot ${i<state.used?'used':''}">${i<state.used?(i<state.tickets?'券':'物品'):i+1}</div>`).join('');
-}
-function setMessage(text,type='neutral'){const el=$('#gameMessage');el.textContent=text;el.className=`game-message ${type}`}
-function reset(){state.used=2;state.tickets=0;state.claimedDate=null;state.date=new Date(2026,9,12);setMessage('测试账号已重置');renderState()}
-function fill(){state.used=6;setMessage('背包已填满');renderState()}
-function clearBag(){state.used=0;state.tickets=0;setMessage('背包已清空');renderState()}
-function nextDay(){state.date.setDate(state.date.getDate()+1);setMessage('模拟日期已推进一天');renderState()}
-function claim(){
-  if(state.claimedDate===dateKey()){setMessage('领取失败：今天已经领取','error');return {ok:false,reason:'今天已经领取'}}
-  if(state.used>=6){if(state.version==='buggy')state.claimedDate=dateKey();setMessage('领取失败：背包已满','error');renderState();return {ok:false,reason:'背包已满'}}
-  state.used++;state.tickets++;state.claimedDate=dateKey();setMessage('领取成功：训练券 × 1','success');renderState();return {ok:true,reason:'领取成功'}
-}
-function renderRules(rules=defaultRules){$('#ruleCount').textContent=`${rules.length} 条`;$('#ruleList').innerHTML=rules.map((r,i)=>`<div class="rule-item"><b>R${i+1}</b><span>${r}</span></div>`).join('')}
-function renderCases(){
-  $('#caseList').innerHTML=cases.map((c,i)=>`<div class="case" data-id="${c.id}"><div class="case-top"><span class="case-index">0${i+1}</span><span class="case-name">${c.name}</span><span class="status-pill ${results[c.id]||''}">${results[c.id]==='pass'?'通过':results[c.id]==='fail'?'失败':'可执行'}</span></div><p>${c.desc}</p></div>`).join('');
-  $$('.case').forEach(el=>el.onclick=()=>runCase(el.dataset.id));
-}
-function counts(){const v=Object.values(results);$('#passCount').textContent=v.filter(x=>x==='pass').length;$('#failCount').textContent=v.filter(x=>x==='fail').length;$('#errorCount').textContent=0}
-function logStep(title,detail,bad=false,assertion=''){
-  const t=$('#timeline');if(t.classList.contains('empty')){t.classList.remove('empty');t.innerHTML=''}
-  t.insertAdjacentHTML('beforeend',`<div class="timeline-item"><span class="timeline-icon ${bad?'bad':''}">${bad?'!':'✓'}</span><div class="timeline-copy"><b>${title}</b><p>${detail}</p>${assertion?`<div class="assertion ${bad?'bad':''}">${assertion}</div>`:''}</div></div>`);t.scrollTop=t.scrollHeight;
-}
-async function action(title,detail,fn){logStep(title,detail);await sleep(330);return fn?fn():undefined}
-function buildDefect(){
-  $('#defectBadge').textContent='1';$('#defectEmpty').classList.add('hidden');const d=$('#defectCard');d.classList.remove('hidden');
-  d.innerHTML=`<header><small>BUG-001 · 高优先级</small><h3>背包满导致发奖失败后，当天领取资格仍被消耗</h3></header><div class="defect-body"><div class="field"><b>测试版本</b><p>v1.3.0 · 含预埋缺陷</p></div><div class="field"><b>前置条件</b><p>账号今天未领取，背包已满。</p></div><div class="field"><b>复现步骤</b><p>1. 点击领取，提示背包已满；2. 清空背包；3. 再次点击领取。</p></div><div class="field"><b>预期 / 实际</b><p>预期第二次成功并获得 1 张券；实际提示“今天已经领取”，券数量为 0。</p></div><div class="field"><b>影响</b><p>用户未获得奖励，却失去当天领取机会。</p></div><div class="field"><b>原因线索</b><p>领取状态可能在发奖成功前被更新；尚需代码确认。</p></div><div class="field evidence-chips"><b>证据</b><span>操作时间线 × 6</span><span>领取状态快照</span><span>背包容量记录</span></div></div>`;
-  $('#retestBtn').disabled=false;
-}
-async function runCase(id){
-  if(running)return;running=true;const c=cases.find(x=>x.id===id);$$('.case').forEach(x=>x.classList.toggle('active',x.dataset.id===id));
-  $('#runStatus').textContent='执行中';$('#runStatus').className='idle running';$('#activeCaseName').textContent=c.name;$('#activeCaseMeta').textContent=`依据：${c.basis}`;$('#timeline').className='timeline';$('#timeline').innerHTML='';
-  await action('重置测试账号','恢复默认日期、背包和领取资格',reset);
-  let passed=true;
-  if(id==='normal'){
-    const r=await action('点击领取','页面动作：领取今日奖励',claim);passed=r.ok&&state.tickets===1;logStep('确定性断言',`券数量=${state.tickets}，领取状态=${state.claimedDate===dateKey()?'已领取':'未领取'}`,!passed,passed?'实际结果符合预期：成功获得 1 张券':'预期获得 1 张券');
-  }else if(id==='duplicate'){
-    await action('首次领取','建立“当天已领取”前置状态',claim);const before=state.tickets;const r=await action('再次点击领取','验证每日领取限制',claim);passed=!r.ok&&state.tickets===before;logStep('确定性断言',`提示=${r.reason}，券数量仍为 ${state.tickets}`,!passed,passed?'符合预期：未重复发奖':'出现重复发奖');
-  }else if(id==='full'){
-    await action('填满背包','设置 6 / 6 个格子',fill);const r=await action('点击领取','在无空位状态尝试发奖',claim);passed=!r.ok&&state.tickets===0;logStep('确定性断言',`提示=${r.reason}，券数量=${state.tickets}`,!passed,passed?'符合预期：发奖失败':'预期不应发放训练券');
-  }else if(id==='retry'){
-    await action('填满背包','设置 6 / 6 个格子',fill);const r1=await action('第一次点击领取','预期：背包已满，失败但不扣机会',claim);await action('清空背包','释放全部背包格子',clearBag);const r2=await action('第二次点击领取','验证失败后仍可领取',claim);passed=!r1.ok&&r2.ok&&state.tickets===1;logStep('确定性断言',`第二次提示=${r2.reason}，券数量=${state.tickets}，领取状态=${state.claimedDate===dateKey()?'已领取':'未领取'}`,!passed,passed?'实际结果符合预期：重试成功':'与预期不一致：发奖失败仍消耗了领取机会');
-  }else if(id==='nextday'){
-    await action('前一天领取','建立已领取状态',claim);await action('推进模拟日期','通过环境时钟进入下一天',nextDay);const r=await action('新一天点击领取','验证领取资格按日期刷新',claim);passed=r.ok&&state.tickets===2;logStep('确定性断言',`提示=${r.reason}，累计券数量=${state.tickets}`,!passed,passed?'符合预期：新一天可再次领取':'跨日后领取资格未恢复');
-  }
-  results[id]=passed?'pass':'fail';if(!passed){lastFailed=id;buildDefect()}
-  renderCases();counts();$('#runStatus').textContent=passed?'通过':'发现缺陷';$('#runStatus').className='idle done';running=false;
-}
-async function runAll(){if(running)return;for(const c of cases){await runCase(c.id);await sleep(180)}}
-function analyze(){
-  const text=$('#requirementInput').value;let rules=[];
-  if(/每天/.test(text))rules.push('每个账号每天最多领取 1 次');
-  if(/不叠加|格子/.test(text))rules.push('每张训练券占 1 个背包格且不叠加');
-  if(/背包满/.test(text))rules.push('背包满时发奖失败，不能消耗领取机会');
-  if(/清理背包|重新领取/.test(text))rules.push('清理背包后，同一天可以再次领取');
-  if(/日期|跨日/.test(text))rules.push('资格按测试环境模拟日期刷新');
-  if(!rules.length)rules=['尚未识别到可验证的明确规则'];renderRules(rules);
-  const ambiguous=!/日期|跨日|永久一次/.test(text);$('#ambiguity').classList.toggle('hidden',!ambiguous);$('#ambiguity').innerHTML=ambiguous?'⚠ <b>需要补充：</b>需求未说明第二天是否恢复领取资格，跨日用例暂不能确定预期。':'';
-  $('#caseCount').textContent=ambiguous?'4 / 5 可执行':'5 / 5 可执行';
-}
-function switchTab(name){$$('.tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===name));$$('.tab-content').forEach(x=>x.classList.remove('active'));$(`#${name}Tab`).classList.add('active')}
-
-$('#claimBtn').onclick=claim;$('#resetBtn').onclick=reset;$('#fillBtn').onclick=fill;$('#clearBtn').onclick=clearBag;$('#nextDayBtn').onclick=nextDay;$('#readBtn').onclick=()=>{setMessage(`状态已读取：${state.claimedDate===dateKey()?'今天已领取':'未领取'}，训练券 ${state.tickets} 张`);renderState()};
-$('#versionSelect').onchange=e=>{state.version=e.target.value;reset();results={};lastFailed=null;renderCases();counts();setMessage(e.target.value==='buggy'?'已切换到含预埋缺陷版本':'已切换到修复版本')};
-$('#analyzeBtn').onclick=analyze;$('#runAllBtn').onclick=runAll;$$('.tabs button').forEach(x=>x.onclick=()=>switchTab(x.dataset.tab));
-$('#retestBtn').onclick=async()=>{state.version='fixed';$('#versionSelect').value='fixed';switchTab('steps');await runCase(lastFailed||'retry')};
-renderRules();renderCases();renderState();
+function rules(){return [spec==='daily'?'每账号每天最多领取1张':'每账号永久最多领取1张','训练券占1个格子且不叠加','背包满时失败且不消耗资格','清空背包后允许再次尝试','日期使用测试环境可控时钟']}
+function renderRules(){let rs=rules();$('#ruleCount').textContent=rs.length+' 条';$('#ruleList').innerHTML=rs.map((x,i)=>`<div class="rule"><b>R0${i+1}</b>${x}</div>`).join('');$('#modeTag').textContent=spec==='daily'?'每日规则':'永久规则'}
+function renderCases(){let cs=baseCases();$('#caseList').innerHTML=cs.map((c,i)=>`<div class="case" data-id="${c.id}"><div class="case-main"><span class="case-index">${c.id}</span><span class="case-name">${c.name}</span><span class="badge">${confirmed?'已确认':'待确认'}</span></div><div class="case-details"><b>前置：</b>${c.pre}<br><b>步骤：</b>${c.steps}<br><b>预期：</b>${c.expect}<br><b>依据：</b>${c.basis}<input class="case-edit" aria-label="编辑${c.name}" value="${c.expect}"></div></div>`).join('');$$('.case-main').forEach(x=>x.onclick=()=>x.parentElement.classList.toggle('open'));$('#caseCount').textContent='5 / 5 可执行'}
+function analyze(){let text=$('#requirementInput').value;let isDaily=/每天|每日/.test(text),isLife=/永久|终身/.test(text);spec=isLife&&!isDaily?'lifetime':'daily';renderRules();renderCases();confirmed=false;$('#runBtn').disabled=true;let missing=!/跨日|日期|永久|每天|每日/.test(text);$('#clarification').classList.toggle('hidden',!missing);$('#clarification').innerHTML=missing?'需要澄清：第二天是否恢复领取资格？跨日用例已标记为缺少条件。':'';$('#caseCount').textContent=missing?'4 / 5 可执行':'5 / 5 可执行'}
+function game(){return frame.contentWindow.QA_GAME}
+function setStep(n,title,detail,tool){$('#stepNo').textContent=String(n).padStart(2,'0');$('#stepTitle').textContent=title;$('#stepDetail').textContent=detail;$('#stepTool').textContent=tool}
+function log(tool,msg,type='ok'){let el=$('#toolLog');el.insertAdjacentHTML('beforeend',`<p class="${type==='ok'?'tool-ok':type==='bad'?'tool-bad':''}">[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] ${tool} → ${msg}</p>`);el.scrollTop=el.scrollHeight}
+async function tool(name,detail,fn,step){if(stopped)throw new Error('STOPPED');setStep(step,detail,name);log(name,'调用中…','');await wait(220);if(faultNext){faultNext=false;$('#frameFault').classList.remove('hidden');log(name,'TIMEOUT / 2 次有限重试后停止','bad');throw new Error('TOOL_TIMEOUT')}let out=fn();log(name,'完成');return out}
+async function clickClaim(step){return tool('click_claim','通过真实页面按钮领取',()=>{let b=frame.contentDocument.querySelector('[data-testid="claim-reward"]');if(!b)throw new Error('ELEMENT_NOT_FOUND');b.click();return game().state()},step)}
+async function capture(caseId,label,step){let state=game().state(),data='';try{if(window.html2canvas){let canvas=await html2canvas(frame.contentDocument.body,{backgroundColor:'#0f1923',width:frame.contentDocument.documentElement.clientWidth,height:frame.contentDocument.documentElement.clientHeight,scale:.75,logging:false});data=canvas.toDataURL('image/jpeg',.78)}}catch(e){log('capture_evidence','截图失败：'+e.message,'bad')}evidence.push({caseId,label,state,data,time:new Date().toLocaleTimeString('zh-CN',{hour12:false})});$('#evidenceCount').textContent=evidence.length;renderEvidence();log('capture_evidence',data?'真实页面截图 + 状态快照已保存':'状态快照已保存（截图组件不可用）',data?'ok':'bad');setStep(step,'保存执行证据','capture_evidence')}
+function assertResult(c,pass,actual,status='pass'){results.push({caseId:c.id,name:c.name,status:status==='error'?'error':pass?'pass':'fail',expect:c.expect,actual,basis:c.basis});if(!pass&&status!=='error')hasDefect=true;renderResults();if(hasDefect){renderDefect();$('#retestBtn').disabled=false}}
+async function runCase(c,offset=0){let s=1+offset;await tool('reset_account',`${c.id} 前重置隔离账号`,()=>game().reset({version:$('#versionSelect').value}),s++);if(c.id==='C01'){let before=game().state();await clickClaim(s++);let a=await tool('read_state','读取提示与账户状态',()=>game().state(),s++);await capture(c.id,'领取结果',s++);assertResult(c,a.tickets===1&&a.used===before.used+1&&a.lastMessage.includes('成功'),`提示=${a.lastMessage}；tickets=${a.tickets}；bag=${a.used}/${a.capacity}`)}
+else if(c.id==='C02'){await clickClaim(s++);let before=game().state().tickets;await clickClaim(s++);let a=await tool('read_state','读取二次领取后的状态',()=>game().state(),s++);assertResult(c,a.tickets===before&&a.lastMessage.includes('已领取'),`提示=${a.lastMessage}；tickets=${a.tickets}`)}
+else if(c.id==='C03'){await tool('set_inventory','将背包设置为 5/5',()=>game().fill(),s++);await clickClaim(s++);let a=await tool('read_state','核对失败提示和领取资格',()=>game().state(),s++);await capture(c.id,'满包失败状态',s++);assertResult(c,a.tickets===0&&a.claimedKey===null&&a.lastMessage.includes('背包已满'),`提示=${a.lastMessage}；claimedKey=${a.claimedKey}; tickets=${a.tickets}`)}
+else if(c.id==='C04'){await tool('set_inventory','将背包设置为 5/5',()=>game().fill(),s++);await clickClaim(s++);await capture(c.id,'第一次领取失败',s++);await tool('set_inventory','清空背包；保留本用例状态',()=>game().clear(),s++);await clickClaim(s++);let a=await tool('read_state','核对第二次领取结果',()=>game().state(),s++);await capture(c.id,'清空后重试结果',s++);assertResult(c,a.tickets===1&&a.lastMessage.includes('成功'),`提示=${a.lastMessage}；tickets=${a.tickets}；claimedKey=${a.claimedKey}`)}
+else {await tool('set_inventory','为跨日测试清空背包',()=>game().clear(),s++);await clickClaim(s++);await tool('advance_date','推进测试时钟一天',()=>game().advance(),s++);await clickClaim(s++);let a=await tool('read_state','读取跨日后的账户状态',()=>game().state(),s++);let pass=spec==='daily'?a.tickets===2:a.tickets===1;assertResult(c,pass,`提示=${a.lastMessage}；tickets=${a.tickets}；date=${a.date}`)}}
+async function runAll(onlyRetry=false){if(running)return;running=true;stopped=false;$('#runState').textContent='RUNNING';$('#runBtn').disabled=true;$('#stopBtn').disabled=false;$('#frameFault').classList.add('hidden');if(!onlyRetry){results=[];evidence=[];hasDefect=false;renderResults();renderEvidence();$('#defectCount').textContent='0';$('#defectPanel').className='empty';$('#defectPanel').textContent='只有失败且证据充分时才生成缺陷单'}let list=onlyRetry?baseCases().filter(x=>x.id==='C04'):baseCases();for(let c of list){try{await runCase(c)}catch(e){if(e.message==='STOPPED')break;assertResult(c,false,`自动化异常：${e.message}`,'error');break}}running=false;$('#runState').textContent=stopped?'STOPPED':'DONE';$('#runBtn').disabled=!confirmed;$('#stopBtn').disabled=true}
+function renderResults(){let host=$('#resultList');if(!results.length){host.className='empty';host.textContent='等待真实执行结果'}else{host.className='';host.innerHTML=results.map(r=>`<div class="result ${r.status}"><div class="result-head"><b>${r.caseId} · ${r.name}</b><span>${r.status==='pass'?'通过':r.status==='fail'?'失败':'执行异常'}</span></div><p>需求依据：${r.basis}</p><div class="comparison"><div><b>预期</b>${r.expect}</div><div><b>实际</b>${r.actual}</div></div></div>`).join('')}$('#passCount').textContent=results.filter(x=>x.status==='pass').length;$('#failCount').textContent=results.filter(x=>x.status==='fail').length;$('#errorCount').textContent=results.filter(x=>x.status==='error').length}
+function renderEvidence(){let host=$('#evidenceGallery');if(!evidence.length){host.className='empty';host.textContent='执行时捕获真实页面截图与账户状态'}else{host.className='';host.innerHTML=evidence.map(e=>`<article class="evidence-card">${e.data?`<img src="${e.data}" alt="${e.caseId} 执行时真实页面截图">`:''}<div class="evidence-meta">${e.caseId} / ${e.label} / ${e.time}<br>message=${e.state.lastMessage}<br>bag=${e.state.used}/${e.state.capacity} · tickets=${e.state.tickets} · claimedKey=${e.state.claimedKey}</div></article>`).join('')}}
+function renderDefect(){let failed=results.find(x=>x.caseId==='C04'&&x.status==='fail')||results.find(x=>x.status==='fail');if(!failed)return;$('#defectCount').textContent='1';let p=$('#defectPanel');p.className='defect';p.innerHTML=`<div class="defect-title"><span>BUG-001 · P1 · 执行证据充分</span><h2>背包满导致发奖失败后，领取资格仍被消耗</h2></div><div class="defect-field"><b>被测版本</b><p>${$('#versionSelect').selectedOptions[0].textContent}</p></div><div class="defect-field"><b>前置条件</b><p>隔离账号未领取；背包容量 5/5。</p></div><div class="defect-field"><b>复现步骤</b><p>1. 点击“领取今日补给”；2. 确认背包已满；3. 清空背包；4. 再次点击领取。</p></div><div class="defect-field"><b>需求依据</b><p>背包满时发奖失败，不消耗领取机会；清空后可重新领取。</p></div><div class="defect-field"><b>预期 / 实际</b><p>预期第二次领取成功并获得1张券；实际提示“今日已领取”，训练券仍为0。</p></div><div class="defect-field"><b>证据</b><p>执行时真实页面截图、按钮操作日志、账户状态 claimedKey 与背包/券数量快照。</p></div><div class="defect-field"><b>影响</b><p>玩家未获得奖励，却永久失去当日领取机会。</p></div><div class="defect-field"><b>原因线索（未确认）</b><p>领取标记可能在容量检查之前写入；需结合服务端代码确认。</p></div>`}
+$$('.tabs button').forEach(b=>b.onclick=()=>{$$('.tabs button').forEach(x=>x.classList.toggle('active',x===b));$$('.tab').forEach(x=>x.classList.remove('active'));$('#'+b.dataset.tab+'Tab').classList.add('active')});
+$$('.nav').forEach(b=>b.onclick=()=>{$('#'+b.dataset.jump).scrollIntoView({behavior:'smooth'});$$('.nav').forEach(x=>x.classList.toggle('active',x===b))});
+$('#analyzeBtn').onclick=analyze;$('#lifetimeBtn').onclick=()=>{$('#requirementInput').value=lifetime;analyze()};$('#confirmBtn').onclick=()=>{confirmed=true;renderCases();$('#runBtn').disabled=false;$('#confirmBtn').textContent='✓ 已确认 5 条用例'};$('#runBtn').onclick=()=>runAll();$('#stopBtn').onclick=()=>stopped=true;$('#faultBtn').onclick=()=>{faultNext=true;$('#faultBtn').textContent='下一工具调用将超时'};$('#versionSelect').onchange=()=>{frame.onload=()=>{};game().reset({version:$('#versionSelect').value})};$('#retestBtn').onclick=async()=>{$('#versionSelect').value='fixed';game().reset({version:'fixed'});$$('.tabs button').find(x=>x.dataset.tab==='retest').click();await runAll(true);let r=results.filter(x=>x.caseId==='C04').at(-1);$('#retestResult').innerHTML=r&&r.status==='pass'?'<div class="retest-pass">✓ 0.9.5 复测通过：清空背包后成功获得1张训练券</div>':'<div class="retest-pass">复测未通过，请查看执行记录</div>'};
+frame.addEventListener('load',()=>{renderRules();renderCases()});renderRules();renderCases();renderResults();
