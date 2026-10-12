@@ -3,3 +3,5 @@ site-package*.tgz
 node_modules/
 artifacts/
 .env
+
+.vercel
