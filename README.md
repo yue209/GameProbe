@@ -39,6 +39,22 @@ pnpm start
 
 模型输出不得直接执行任意代码。确定性断言、截图、状态记录和最终结果分类仍由执行器负责。
 
+线上 Vercel 部署使用两个 Node.js Functions：
+
+- `GET /api/health`：返回模型配置状态，不暴露密钥。
+- `POST /api/agent/analyze`：服务端调用 Qwen-Plus，校验并过滤模型返回的动作。
+
+在 Vercel 项目中配置以下环境变量并重新部署：
+
+```text
+DASHSCOPE_API_KEY=<Secret>
+QWEN_MODEL=qwen-plus
+```
+
+页面打开后会调用 `/api/health`。显示“Qwen-Plus 已连接”时，点击“生成候选测试”会真实调用模型；调用失败会明确回退到固定用例模式。浏览器不会取得 `DASHSCOPE_API_KEY`。
+
+Vercel Function 适合需求分析等短请求；完整 Playwright 浏览器执行仍通过本地 Node 服务或支持浏览器进程的独立执行服务运行。
+
 直接运行真实浏览器回归：
 
 ```powershell
